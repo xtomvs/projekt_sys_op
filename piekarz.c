@@ -35,36 +35,87 @@ void setup_shared_memory()
     }
 }
 
-
-void bake_products() {
-    sem_op(semid, SEM_CONVEYOR, -1);
-
-    int num_products = 1 + rand() % 5;
-    printf("\nPiekarz: Rozpoczynam nową partię produkcji (%d rodzajów)\n", num_products);
-
-    for(int i=0; i<num_products; i++)
-    {
-        //losowy produkt
-        ProductType product = rand() % NUM_PRODUCTS;
-
-        //sprawdzamy czy jest miejsce na podajniku
-        if(shmptr->conveyor_items[product] < MAX_CONVEYOR_ITEMS)
-        {
-            int quantity = 1+ rand() % 8;
-
-            if(shmptr->conveyor_items[product] + quantity > MAX_CONVEYOR_ITEMS)
-            {
-                quantity = MAX_CONVEYOR_ITEMS - shmptr->conveyor_items[product];
-            }
-
-            if(quantity>0)
-            {
-                shmptr->conveyor_items[product] += quantity;
-                shmptr->total_produced[product] += quantity;
-                printf("Piekarz: Wyprodukowano %d szt. %s (%.2f zł/szt\n)", quantity, PRODUCT_NAMES[product], PRODUCT_PRICES[product]);
-            }
-        }
+// Funkcja inicjalizująca podajniki
+void inicjalizuj_podajniki(Shared* shmptr) {
+    for (int i = 0; i < LICZBA_PRODUKTOW; i++) {
+        shmptr->podajniki[i].poczatek = 0;
+        shmptr->podajniki[i].koniec = 0;
+        shmptr->podajniki[i].liczba_produktow = 0;
+        shmptr->podajniki[i].max_produktow = MAX_PODAJNIK;
     }
+}
+
+// Funkcja dodająca produkt na podajnik
+int dodaj_na_podajnik(Shared* shmptr, int semid, int produkt_id, int ilosc) {
+    sem_op(semid, SEM_CONVEYOR, -1);  // Blokada dostępu do podajnika
+    
+    int sukces = 0;
+    if (shmptr->podajniki[produkt_id].liczba_produktow + ilosc <= MAX_PODAJNIK) {
+        for (int i = 0; i < ilosc; i++) {
+            shmptr->podajniki[produkt_id].produkty[shmptr->podajniki[produkt_id].koniec] = produkt_id;
+            shmptr->podajniki[produkt_id].koniec = (shmptr->podajniki[produkt_id].koniec + 1) % MAX_PODAJNIK;
+            shmptr->podajniki[produkt_id].liczba_produktow++;
+        }
+        sukces = 1;
+    }
+    
+    sem_op(semid, SEM_CONVEYOR, 1);  // Zwolnienie dostępu do podajnika
+    return sukces;
+}
+
+void bake_products(Shared* shmptr, int semid) {
+    srand(time(NULL));
+
+    //losowanie liczby produktow w partii(1-3)
+    int liczba_rodzajow = (rand() % MAX_PARTIA) + 1;
+    printf("\n=== NOWA PARTIA WYPIEKÓW ===\n");
+
+
+    //tablica do sledzenia wybranych produktow
+    int wybrane_produkty[MAX_PARTIA] = {-1, -1, -1};
+
+    //wybieranie roznych rodzajow produktow
+    for (int i=0; i<liczba_rodzajow; i++)
+    {
+        int produkt_id;
+        int jest_unikalny;
+
+        //upewniamy sie ze wybiera unikalny produkt
+        do {
+            jest_unikalny = 1;
+            produkt_id = rand() % LICZBA_PRODUKTOW;
+
+            for (int j=0; j<1; j++)
+            {
+                if(wybrane_produkty[j] == produkt_id)
+                {
+                    jest_unikalny = 0;
+                    break;
+                }
+            }
+           } while (!jest_unikalny);
+
+           wybrane_produkty[i] = produkt_id;
+
+           //losowa ilosc sztuk produktu (1-5)
+           int ilosc = (rand() % 5) + 1;
+
+           printf("Pieczenie: %d sztuk %s\n", ilosc, shmptr->produkty[produkt_id].nazwa);
+        
+           //proba dodania produktow na podajnik
+           if(dodaj_na_podajnik(shmptr, semid, produkt_id, ilosc))
+           {
+            printf("Dodano na podajnik: %d sztuk %s (ID: %d)\n", ilosc, shmptr->produkty[produkt_id].nazwa, produkt_id);
+
+           } else {
+                printf("Podajnik dla %s jest pełny! Nie zmieszczono %d sztuk\n", shmptr->produkty[produkt_id].nazwa, ilosc);
+
+           }
+        
+    } 
+    //staly czas pieczenia 2s
+    sleep(2);
+
 }
 
 int main() {
@@ -72,14 +123,16 @@ int main() {
     initialize_semaphores();
     setup_shared_memory();
 
+    inicjalizuj_produkty(shmptr->produkty);
+    inicjalizuj_podajniki(shmptr);
+
+    printf("Piekarz rozpoczyna pracę...\n");
+
+
     while(shmptr->is_open)
     {
-        if(!shmptr->evacuation_mode && !shmptr->inventory_mode)
-        {
-            bake_products();
-        }
+            bake_products(shmptr, semid);
 
-        sleep(2 + rand() % 4);
     }
 
 }
